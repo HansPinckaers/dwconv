@@ -18,6 +18,7 @@ stride = 1
 def test_time(n, c, size_x, size_y, ksize, stride, padding):
     x = torch.rand((n,c,size_y,size_x)).cuda()
     w = torch.rand((c,1,ksize,ksize)).cuda()
+    w_full = torch.rand((c,c,ksize,ksize)).cuda()
     bias = torch.rand((c)).cuda()
     bias = None
     #print(x)
@@ -29,7 +30,7 @@ def test_time(n, c, size_x, size_y, ksize, stride, padding):
     st = time.time()
     dry_num = 5
     num_batches = 10
-    with torch.autograd.profiler.profile(enabled=False, use_cuda=True) as prof:
+    with torch.autograd.profiler.profile(enabled=True, use_cuda=True) as prof:
         for i in range(dry_num + num_batches):
             if i == dry_num:
                 st = time.time()
@@ -40,7 +41,18 @@ def test_time(n, c, size_x, size_y, ksize, stride, padding):
         
         o2_t = et - st
         print("My dw", et - st, num_batches / (et - st))
-        
+
+        for i in range(dry_num + num_batches):
+            if i == dry_num:
+                st = time.time()
+                o1 = torch.nn.functional.conv2d(x, w_full, bias, stride, padding)
+
+        torch.cuda.synchronize()
+        #o1 = o1.cpu().detach()
+        et = time.time()
+        o1_t = et - st
+        print("Official (not depth-wise)", et - st, num_batches / (et - st))
+
         
         for i in range(dry_num + num_batches):
             if i == dry_num:
@@ -51,6 +63,7 @@ def test_time(n, c, size_x, size_y, ksize, stride, padding):
         et = time.time()
         o1_t = et - st
         print("Official", et - st, num_batches / (et - st))
+
     #print(prof.key_averages().table(sort_by="cuda_time"))
     #diff = dwconv._C.depth_wise_conv2d(x, w, torch.empty(0), 1, 1, 1, 1) - torch.nn.functional.conv2d(x, w, None, 1, 1, groups=c)
     diff = o2 - o1
@@ -59,9 +72,12 @@ def test_time(n, c, size_x, size_y, ksize, stride, padding):
     print("NCHW {} x {} x {} x {}, kernel {}, stride {}, padding {}" . format(n, c, size_y, size_x, ksize, stride, padding))
     print(torch.max(torch.abs(diff)))
     print("Speed up", o1_t / o2_t)
+
+    print('------------------')
 #print(o2 - x)
 
 eff_arg_list = [
+                    (16, 32, 512, 512, 3, 1, 1),
                     (16, 32, 112, 112, 3, 1, 1),
                     (16, 144, 56, 56, 3, 1, 1),
                     (16, 240, 28, 28, 5, 1, 2),
