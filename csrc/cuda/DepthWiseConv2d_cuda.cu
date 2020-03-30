@@ -14,7 +14,8 @@ __global__ void DepthWiseConv2dSmallFForward(const T* bottom_data,
     const int channels, const int padding, const int height,
     const int width, const int in_kernel_size,
     const int out_height, const int out_width, const int batch_size,
-    T* top_data) {
+    T* top_data) 
+{
     const int in_num = height * width;
     const int out_num = out_height * out_width;
     const int pad_height = height + padding*2;
@@ -126,114 +127,218 @@ __global__ void DepthWiseConv2dSmallFForward(const T* bottom_data,
 }
 
 template <typename T>
-__global__ void DepthWiseConv2dFForward(const T* bottom_data,
+__global__ void DepthWiseConv2dFForward(
+    const T* bottom_data,
     const T* weight_data,
     const T* bias_data,
-    const int channels, const int padding, const int height,
-    const int width, const int kernel_size,
-    const int out_height, const int out_width, const int output_size,
-    T* top_data) {
-    int tidx = threadIdx.y * blockDim.x + threadIdx.x;
-    int o_idx = blockIdx.x * (blockDim.x - kernel_size + 1) + threadIdx.x;
-    int o_idy = blockIdx.y * (blockDim.y - kernel_size + 1) + threadIdx.y;
-    int c = (blockIdx.z) % channels;
-    T bias = 0;
-    if (bias_data != NULL) {
-        bias = bias_data[c];
-    }
+    const int channels, 
+    const int padding,
+    const int height,
+    const int width,
+    const int kernel_size,
+    const int out_height,
+    const int out_width,
+    const int output_size,
+    T* top_data)
+{
+  // indices relative to top_data, which outputs were gonna calc
+  int o_idx = blockIdx.x * (blockDim.x - kernel_size + 1) + threadIdx.x;
+  int o_idy = blockIdx.y * (blockDim.y - kernel_size + 1) + threadIdx.y;
 
+  // current channel we're working on
+  int c = (blockIdx.z) % channels;  
 
-    __shared__ T w_shared[32];
-    if (tidx < kernel_size * kernel_size) {
-        w_shared[tidx] = weight_data[c * kernel_size * kernel_size + tidx];
-    }
-    __syncthreads();
-
-    __shared__ T tmp_shared[32*32];
-for (int n_off = 0; n_off < output_size; n_off += gridDim.z) {
-  if (blockIdx.z + n_off < output_size) {
-    T sum = 0;
-    //int n = blockIdx.z / channels;
-//    int i_off_x = threadIdx.x - padding;
-//    int i_off_y = threadIdx.y - padding;
-
-
-    if (o_idx - padding >= 0 && o_idx - padding < width && o_idy - padding >=0 && o_idy - padding < height) {
-        tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = bottom_data[(blockIdx.z + n_off) * width * height + (o_idy - padding) * width + o_idx - padding];
-//        printf("tids %d, %d, oid %d, %d, padding %d, width %d, height %d, block %d, %d\n", tidx, tidy, o_idx, o_idy, padding, width, height, blockDim.x, blockDim.y);
-    } else {
-        tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 0;
-    }
-    __syncthreads();
-//    std::cout << tidx << " " << tidy << " " << " o " << o_idx << "  " << o_idy << " padding " << padding << " " << width << std::endl;
-    if (o_idx >= 0 && o_idx < out_width && o_idy >=0 && o_idy < out_height && threadIdx.x < blockDim.x - kernel_size + 1 && threadIdx.y < blockDim.y - kernel_size + 1) {
-        for (int i = 0; i < kernel_size; i++) {
-            for (int j = 0; j < kernel_size; j++) {
-                sum += tmp_shared[(threadIdx.y + i) * blockDim.x + threadIdx.x + j] * w_shared[i * kernel_size + j];
-            }
-        }
-        top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy ) * out_width + o_idx ] = sum + bias;
-    }
-  } else {
-//    printf("blockDim %d, %d, %d. gridDim %d, %d, %d os %d z %d off %d ch %d\n", blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z, output_size, blockIdx.z, n_off, channels);
+  T bias = 0;
+  if (bias_data != NULL) {
+    bias = bias_data[c];
   }
+
+  __shared__ T w_shared[32];
+  int tidx = threadIdx.y * blockDim.x + threadIdx.x;
+  if (tidx < kernel_size * kernel_size) {
+    w_shared[tidx] = weight_data[c * kernel_size * kernel_size + tidx];
+  }
+
   __syncthreads();
-}
+
+  // tmp_shared is input data shared over block?
+  __shared__ T tmp_shared[32*32];
+  for (int n_off = 0; n_off < output_size; n_off += gridDim.z) {
+    if (blockIdx.z + n_off < output_size) {
+      T sum = 0;
+
+      // boundary checks
+      if (o_idx - padding >= 0 && 
+          o_idx - padding < width && 
+          o_idy - padding >= 0 && 
+          o_idy - padding < height) 
+      {
+        tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 
+          bottom_data[(blockIdx.z + n_off) * width * height + (o_idy - padding) * width + o_idx - padding];
+        // printf("tids %d, %d, oid %d, %d, padding %d, width %d, height %d, block %d, %d\n", tidx, tidy, o_idx, o_idy, padding, width, height, blockDim.x, blockDim.y);
+      } else {
+        tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 0;
+      }
+
+      __syncthreads();
+
+      //    std::cout << tidx << " " << tidy << " " << " o " << o_idx << "  " << o_idy << " padding " << padding << " " << width << std::endl;
+      if (o_idx >= 0 && 
+          o_idx < out_width && 
+          o_idy >=0 && 
+          o_idy < out_height && 
+          threadIdx.x < blockDim.x - kernel_size + 1 && 
+          threadIdx.y < blockDim.y - kernel_size + 1) 
+      {
+        for (int i = 0; i < kernel_size; i++) {
+          for (int j = 0; j < kernel_size; j++) {
+            sum += tmp_shared[(threadIdx.y + i) * blockDim.x + threadIdx.x + j] * w_shared[i * kernel_size + j];
+          }
+        }
+
+        top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy) * out_width + o_idx] = sum + bias;
+      }
+    } else {
+      // printf("blockDim %d, %d, %d. gridDim %d, %d, %d os %d z %d off %d ch %d\n", blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z, output_size, blockIdx.z, n_off, channels);
+    }
+    __syncthreads();
+  }
 }
 
 template <typename T>
-__global__ void DepthWiseConv2dLargeFForward(const T* bottom_data,
+__global__ void DepthWiseConv2dTransposedFForward(
+    const T* bottom_data,
     const T* weight_data,
     const T* bias_data,
-    const int channels, const int padding, const int height,
-    const int width, const int kernel_size,
-    const int out_height, const int out_width, const int output_size,
-    T* top_data) {
-    int tidx = threadIdx.y * blockDim.x + threadIdx.x;
-    int c = (blockIdx.z) % channels;
-    T bias = 0;
-    if (bias_data != NULL) {
-        bias = bias_data[c];
-    }
+    const int channels,
+    const int padding,
+    const int height,
+    const int width,
+    const int kernel_size,
+    const int out_height,
+    const int out_width,
+    const int output_size,
+    T* top_data) 
+{
+  // indices relative to top_data, which outputs were gonna calc
+  int o_idx = blockIdx.x * (blockDim.x - kernel_size + 1) + threadIdx.x;
+  int o_idy = blockIdx.y * (blockDim.y - kernel_size + 1) + threadIdx.y;
 
+  // current channel we're working on
+  int c = (blockIdx.z) % channels;  
 
-    __shared__ T w_shared[32*32];
-    if (tidx < kernel_size * kernel_size) {
-        w_shared[tidx] = weight_data[c * kernel_size * kernel_size + tidx];
-    }
-    __syncthreads();
+  T bias = 0;
+  if (bias_data != NULL) {
+    bias = bias_data[c];
+  }
 
-    __shared__ T tmp_shared[32*32];
-    for (int n_off = 0; n_off < output_size; n_off += gridDim.z) {
-      if (blockIdx.z + n_off < output_size) {
-        T sum = 0;
-        //int n = blockIdx.z / channels;
-    //    int i_off_x = threadIdx.x - padding;
-    //    int i_off_y = threadIdx.y - padding;
-    
-    
-        if (o_idx - padding >= 0 && o_idx - padding < width && o_idy - padding >=0 && o_idy - padding < height) {
-            tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = bottom_data[(blockIdx.z + n_off) * width * height + (o_idy - padding) * width + o_idx - padding];
-    //        printf("tids %d, %d, oid %d, %d, padding %d, width %d, height %d, block %d, %d\n", tidx, tidy, o_idx, o_idy, padding, width, height, blockDim.x, blockDim.y);
-        } else {
-            tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 0;
-        }
-        __syncthreads();
-    //    std::cout << tidx << " " << tidy << " " << " o " << o_idx << "  " << o_idy << " padding " << padding << " " << width << std::endl;
-        if (o_idx >= 0 && o_idx < out_width && o_idy >=0 && o_idy < out_height && threadIdx.x < blockDim.x - kernel_size + 1 && threadIdx.y < blockDim.y - kernel_size + 1) {
-            for (int i = 0; i < kernel_size; i++) {
-                for (int j = 0; j < kernel_size; j++) {
-                    sum += tmp_shared[(threadIdx.y + i) * blockDim.x + threadIdx.x + j] * w_shared[i * kernel_size + j];
-                }
-            }
-            top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy ) * out_width + o_idx ] = sum + bias;
-        }
+  __shared__ T w_shared[32];
+  int tidx = threadIdx.y * blockDim.x + threadIdx.x;
+  if (tidx < kernel_size * kernel_size) {
+    w_shared[tidx] = weight_data[c * kernel_size * kernel_size + tidx];
+  }
+
+  __syncthreads();
+
+  // tmp_shared is placeholder for input data shared over block
+  // w_shared is weight data shared over block
+  __shared__ T tmp_shared[32*32];
+  for (int n_off = 0; n_off < output_size; n_off += gridDim.z) {
+    if (blockIdx.z + n_off < output_size) {
+      T sum = 0;
+
+      // boundary checks
+      if (o_idx - padding >= 0 && 
+          o_idx - padding < width && 
+          o_idy - padding >= 0 && 
+          o_idy - padding < height) 
+      {
+        tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 
+          bottom_data[(blockIdx.z + n_off) * width * height + (o_idy - padding) * width + o_idx - padding];
+        // printf("tids %d, %d, oid %d, %d, padding %d, width %d, height %d, block %d, %d\n", tidx, tidy, o_idx, o_idy, padding, width, height, blockDim.x, blockDim.y);
       } else {
-    //    printf("blockDim %d, %d, %d. gridDim %d, %d, %d os %d z %d off %d ch %d\n", blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z, output_size, blockIdx.z, n_off, channels);
+        tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 0;
       }
+
       __syncthreads();
+
+      //    std::cout << tidx << " " << tidy << " " << " o " << o_idx << "  " << o_idy << " padding " << padding << " " << width << std::endl;
+      if (o_idx >= 0 && 
+          o_idx < out_width && 
+          o_idy >=0 && 
+          o_idy < out_height && 
+          threadIdx.x < blockDim.x - kernel_size + 1 && 
+          threadIdx.y < blockDim.y - kernel_size + 1) 
+      {
+        for (int i = 0; i < kernel_size; i++) {
+          for (int j = 0; j < kernel_size; j++) {
+            current += tmp_shared[(threadIdx.y) * blockDim.x + threadIdx.x] * w_shared[i * kernel_size + j];
+            top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy + i) * out_width + o_idx + j] += current 
+            // + bias;
+          }
+        }
+      }
+    } else {
+      // printf("blockDim %d, %d, %d. gridDim %d, %d, %d os %d z %d off %d ch %d\n", blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z, output_size, blockIdx.z, n_off, channels);
     }
+
+    __syncthreads();
+  }
 }
+
+/* template <typename T> */
+/* __global__ void DepthWiseConv2dLargeFForward(const T* bottom_data, */
+/*     const T* weight_data, */
+/*     const T* bias_data, */
+/*     const int channels, const int padding, const int height, */
+/*     const int width, const int kernel_size, */
+/*     const int out_height, const int out_width, const int output_size, */
+/*     T* top_data) { */
+/*   int tidx = threadIdx.y * blockDim.x + threadIdx.x; */
+/*   int c = (blockIdx.z) % channels; */
+/*   T bias = 0; */
+/*   if (bias_data != NULL) { */
+/*     bias = bias_data[c]; */
+/*   } */
+
+
+/*   __shared__ T w_shared[32*32]; */
+/*   if (tidx < kernel_size * kernel_size) { */
+/*     w_shared[tidx] = weight_data[c * kernel_size * kernel_size + tidx]; */
+/*   } */
+/*   __syncthreads(); */
+
+/*   __shared__ T tmp_shared[32*32]; */
+/*   for (int n_off = 0; n_off < output_size; n_off += gridDim.z) { */
+/*     if (blockIdx.z + n_off < output_size) { */
+/*       T sum = 0; */
+/*       //int n = blockIdx.z / channels; */
+/*       //    int i_off_x = threadIdx.x - padding; */
+/*       //    int i_off_y = threadIdx.y - padding; */
+
+
+/*       if (o_idx - padding >= 0 && o_idx - padding < width && o_idy - padding >=0 && o_idy - padding < height) { */
+/*         tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = bottom_data[(blockIdx.z + n_off) * width * height + (o_idy - padding) * width + o_idx - padding]; */
+/*         //        printf("tids %d, %d, oid %d, %d, padding %d, width %d, height %d, block %d, %d\n", tidx, tidy, o_idx, o_idy, padding, width, height, blockDim.x, blockDim.y); */
+/*       } else { */
+/*         tmp_shared[threadIdx.y * blockDim.x + threadIdx.x] = 0; */
+/*       } */
+/*       __syncthreads(); */
+/*       //    std::cout << tidx << " " << tidy << " " << " o " << o_idx << "  " << o_idy << " padding " << padding << " " << width << std::endl; */
+/*       if (o_idx >= 0 && o_idx < out_width && o_idy >=0 && o_idy < out_height && threadIdx.x < blockDim.x - kernel_size + 1 && threadIdx.y < blockDim.y - kernel_size + 1) { */
+/*         for (int i = 0; i < kernel_size; i++) { */
+/*           for (int j = 0; j < kernel_size; j++) { */
+/*             sum += tmp_shared[(threadIdx.y + i) * blockDim.x + threadIdx.x + j] * w_shared[i * kernel_size + j]; */
+/*           } */
+/*         } */
+/*         top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy ) * out_width + o_idx ] = sum + bias; */
+/*       } */
+/*     } else { */
+/*       //    printf("blockDim %d, %d, %d. gridDim %d, %d, %d os %d z %d off %d ch %d\n", blockDim.x, blockDim.y, blockDim.z, gridDim.x, gridDim.y, gridDim.z, output_size, blockIdx.z, n_off, channels); */
+/*     } */
+/*     __syncthreads(); */
+/*   } */
+/* } */
 
 at::Tensor DepthWiseConv2d_forward_cuda(const at::Tensor& input,
     const at::Tensor& weight,
@@ -467,15 +572,15 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_input_cuda(const at::Tensor& gr
   auto height = input.size(2);
   auto width = input.size(3);
 
-  // if input_size is None:
-  //     raise ValueError("grad.conv2d_input requires specifying an input_size")
+  if input_size is None:
+      raise ValueError("grad.conv2d_input requires specifying an input_size")
 
-  // grad_input_padding = _grad_input_padding(grad_output, input_size, stride,
-  //                                          padding, kernel_size)
+  grad_input_padding = _grad_input_padding(grad_output, input_size, stride,
+                                           padding, kernel_size)
 
-  // return torch.conv_transpose2d(
-  //     grad_output, weight, None, stride, padding, grad_input_padding, groups,
-  //     dilation)
+  return torch.conv_transpose2d(
+      grad_output, weight, None, stride, padding, grad_input_padding, groups,
+      dilation)
 
   // ------------------------
   auto kernel_size = weight.size(2);  // kernel is the grad_output
