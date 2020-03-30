@@ -26,7 +26,7 @@ at::Tensor DepthWiseConv2d_forward(const at::Tensor& input,
   AT_ERROR("Not implemented on the CPU");
 }
 
-at::Tensor DepthWiseConv2d_backward(const at::Tensor& grad,
+at::Tensor DepthWiseConv2d_backward_weight(const at::Tensor& grad,
                                  const at::Tensor& input,
                                  const at::Tensor& weight,
                                  const at::Tensor& bias,
@@ -36,13 +36,32 @@ at::Tensor DepthWiseConv2d_backward(const at::Tensor& grad,
                                  const int groups) {
   if (grad.type().is_cuda()) {
 #ifdef WITH_CUDA
-    return DepthWiseConv2d_backward_cuda(grad, input, weight, bias, stride, padding, dilation, groups);
+    return DepthWiseConv2d_backward_weight_cuda(grad, input, weight, bias, stride, padding, dilation, groups);
 #else
     AT_ERROR("Not compiled with GPU support");
 #endif
   }
   AT_ERROR("Not implemented on the CPU");
 }
+
+at::Tensor DepthWiseConv2d_backward_input(const at::Tensor& grad,
+                                 const at::Tensor& input,
+                                 const at::Tensor& weight,
+                                 const at::Tensor& bias,
+                                 const int stride,
+                                 const int padding,
+                                 const int dilation,
+                                 const int groups) {
+  if (grad.type().is_cuda()) {
+#ifdef WITH_CUDA
+    return DepthWiseConv2d_backward_input_cuda(grad, input, weight, bias, stride, padding, dilation, groups);
+#else
+    AT_ERROR("Not compiled with GPU support");
+#endif
+  }
+  AT_ERROR("Not implemented on the CPU");
+}
+
 
 
 

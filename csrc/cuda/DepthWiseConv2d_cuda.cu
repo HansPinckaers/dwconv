@@ -251,7 +251,7 @@ __global__ void DepthWiseConv2dTransposedFForward(
   __shared__ T tmp_shared[32*32];
   for (int n_off = 0; n_off < output_size; n_off += gridDim.z) {
     if (blockIdx.z + n_off < output_size) {
-      T sum = 0;
+      T current = 0;
 
       // boundary checks
       if (o_idx - padding >= 0 && 
@@ -279,7 +279,7 @@ __global__ void DepthWiseConv2dTransposedFForward(
         for (int i = 0; i < kernel_size; i++) {
           for (int j = 0; j < kernel_size; j++) {
             current += tmp_shared[(threadIdx.y) * blockDim.x + threadIdx.x] * w_shared[i * kernel_size + j];
-            top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy + i) * out_width + o_idx + j] += current 
+            top_data[(n_off + blockIdx.z) * out_width * out_height + (o_idy + i) * out_width + o_idx + j] += current;
             // + bias;
           }
         }
@@ -427,7 +427,7 @@ at::Tensor DepthWiseConv2d_forward_cuda(const at::Tensor& input,
   return output;
 }
 
-std::vector<at::Tensor> DepthWiseConv2d_backward_weight_cuda(const at::Tensor& grad,
+at::Tensor DepthWiseConv2d_backward_weight_cuda(const at::Tensor& grad,
     const at::Tensor& input,
     const at::Tensor& weight,
     const at::Tensor& bias,
@@ -438,9 +438,9 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_weight_cuda(const at::Tensor& g
 
   AT_ASSERTM(input.type().is_cuda(), "input must be a CUDA tensor");
 
-  input = input.contiguous().view({1, input.size(0) * input.shape(1), input.shape(2), input.shape(3)}) 
-  grad = grad.contiguous().repeat(1, in_channels / groups, 1, 1)
-  grad = grad.contiguous().view({grad_output.size(0) * grad_output.size(1), 1, grad_output.size(2), grad_output.size(3)})
+  /* input = input.contiguous().view({1, input.size(0) * input.size(1), input.size(2), input.size(3)}); */
+  /* grad = grad.contiguous().repeat(1, in_channels / groups, 1, 1); */
+  /* grad = grad.contiguous().view({grad_output.size(0) * grad_output.size(1), 1, grad_output.size(2), grad_output.size(3)}); */
 
   // ---------------------------------------- GRAD WEIGHT
   // First grad weight
@@ -506,9 +506,13 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_weight_cuda(const at::Tensor& g
     });
     THCudaCheck(cudaGetLastError());
   }
+
+  return grad_weight_output;
 }
 
-std::vector<at::Tensor> DepthWiseConv2d_backward_input_cuda(const at::Tensor& grad,
+// TODO: do not ask for the input, but ask for input size
+at::Tensor DepthWiseConv2d_backward_input_cuda(
+    const at::Tensor& grad,
     const at::Tensor& input,
     const at::Tensor& weight,
     const at::Tensor& bias,
@@ -524,22 +528,15 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_input_cuda(const at::Tensor& gr
   auto height = input.size(2);
   auto width = input.size(3);
 
-  if input_size is None:
-      raise ValueError("grad.conv2d_input requires specifying an input_size")
+  // grad_input_padding = _grad_input_padding(grad_output, input_size, stride,
+  //                                          padding, kernel_size)
 
-  grad_input_padding = _grad_input_padding(grad_output, input_size, stride,
-                                           padding, kernel_size)
-
-  return torch.conv_transpose2d(
-      grad_output, weight, None, stride, padding, grad_input_padding, groups,
-      dilation)
-
-  // ------------------------
   auto kernel_size = weight.size(2);  // kernel is the grad_output
 
   // TODO: this function does not yet support dilation
-  auto out_height = (height - kernel_size + 1 + padding * 2) / stride;
-  auto out_width = (width - kernel_size + 1 + padding * 2) / stride;
+  auto out_height = input.size(2);
+  auto out_width = input.size(3);
+
   AT_ASSERTM(grad.size(0) == channels, "Number of channels in the gradient must be equal to input channels");
 
   auto blockdim = 32;
@@ -552,7 +549,6 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_input_cuda(const at::Tensor& gr
   auto blocks_y = THCCeilDiv((long)out_height, blockdim - kernel_size + 1L);
 
   auto grad_input = at::empty({batch_size, channels, height, width}, input.options());
-
   auto output_size = batch_size * channels;
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -567,8 +563,8 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_input_cuda(const at::Tensor& gr
 
     AT_DISPATCH_FLOATING_TYPES(input.type(), "DepthWiseConv2d_backward_input", [&] {
       DepthWiseConv2dFForward<scalar_t><<<grid, block, 0, stream>>>(
-           input.contiguous().data<scalar_t>(),
            grad.contiguous().data<scalar_t>(),
+           weight.contiguous().data<scalar_t>(),
            bias.contiguous().data<scalar_t>(),
            channels,
            padding,
@@ -578,10 +574,10 @@ std::vector<at::Tensor> DepthWiseConv2d_backward_input_cuda(const at::Tensor& gr
            out_height,
            out_width,
            output_size,
-           grad_weight_output.data<scalar_t>());
+           grad_input.data<scalar_t>());
     });
     THCudaCheck(cudaGetLastError());
   }
-  return output;
+  return grad_input;
 }
 
